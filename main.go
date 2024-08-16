@@ -6,6 +6,9 @@ import (
 	"math/rand"
 	"net/http"
 	"time"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type demoAPI struct{}
@@ -52,6 +55,7 @@ func periodicBackgroundTask() {
 }
 
 func main() {
+	registry := prometheus.NewRegistry()
 	listenAddr := flag.String("web.listen-addr", ":8080", "The address to listen on for web requests.")
 	flag.Parse()
 
@@ -59,6 +63,7 @@ func main() {
 
 	api := &demoAPI{}
 	api.register(http.DefaultServeMux)
+	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 
 	log.Fatal(http.ListenAndServe(*listenAddr, nil))
 }
