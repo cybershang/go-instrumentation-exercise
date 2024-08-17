@@ -13,7 +13,6 @@ import (
 type demoAPI struct {
 	registry         *prometheus.Registry
 	requestDurations *prometheus.SummaryVec
-	jobCounter       *prometheus.CounterVec
 }
 
 func (a demoAPI) register(mux *http.ServeMux) {
@@ -45,7 +44,7 @@ func (a demoAPI) bar(w http.ResponseWriter, r *http.Request) {
 	timer.ObserveDuration()
 }
 
-func periodicBackgroundTask(jobCounter *prometheus.CounterVec) {
+func periodicBackgroundTask(jobCounter *prometheus.CounterVec, jobTimeStamp *prometheus.GaugeVec) {
 	log.Println("Starting background task loop...")
 	bgTicker := time.NewTicker(5 * time.Second)
 	for {
@@ -57,6 +56,7 @@ func periodicBackgroundTask(jobCounter *prometheus.CounterVec) {
 		// Simulate the background task either succeeding or failing (with a 30% probability).
 		if rand.Float64() > 0.3 {
 			log.Println("Background task completed successfully.")
+			jobTimeStamp.WithLabelValues("success").SetToCurrentTime()
 		} else {
 			log.Println("Background task failed.")
 			jobCounter.WithLabelValues("failed").Inc()
@@ -87,14 +87,20 @@ func main() {
 		[]string{"status"},
 	)
 
-	registry.MustRegister(requestDurations, jobCounter)
+	jobTimeStamp := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "job_timestamp",
+		Help: "A timestamp of successed job",
+	},
+		[]string{"status"})
+
+	registry.MustRegister(requestDurations, jobCounter, jobTimeStamp)
 
 	listenAddr := flag.String("web.listen-addr", ":8080", "The address to listen on for web requests.")
 	flag.Parse()
 
-	go periodicBackgroundTask(jobCounter)
+	go periodicBackgroundTask(jobCounter, jobTimeStamp)
 
-	api := &demoAPI{requestDurations: requestDurations, registry: registry, jobCounter: jobCounter}
+	api := &demoAPI{requestDurations: requestDurations, registry: registry}
 	api.register(http.DefaultServeMux)
 
 	log.Fatal(http.ListenAndServe(*listenAddr, nil))
