@@ -10,9 +10,10 @@ import (
 	"time"
 )
 
-type demoAPI struct{
-	registry *prometheus.Registry
+type demoAPI struct {
+	registry         *prometheus.Registry
 	requestDurations *prometheus.SummaryVec
+	jobCounter       *prometheus.CounterVec
 }
 
 func (a demoAPI) register(mux *http.ServeMux) {
@@ -44,10 +45,11 @@ func (a demoAPI) bar(w http.ResponseWriter, r *http.Request) {
 	timer.ObserveDuration()
 }
 
-func periodicBackgroundTask() {
+func periodicBackgroundTask(jobCounter *prometheus.CounterVec) {
 	log.Println("Starting background task loop...")
 	bgTicker := time.NewTicker(5 * time.Second)
 	for {
+		jobCounter.WithLabelValues("total").Inc()
 		log.Println("Performing background task...")
 		// Simulate a random duration that the background task needs to be completed.
 		time.Sleep(1*time.Second + time.Duration(rand.Float64()*500)*time.Millisecond)
@@ -57,6 +59,7 @@ func periodicBackgroundTask() {
 			log.Println("Background task completed successfully.")
 		} else {
 			log.Println("Background task failed.")
+			jobCounter.WithLabelValues("failed").Inc()
 		}
 
 		<-bgTicker.C
@@ -77,14 +80,21 @@ func main() {
 		[]string{"path"},
 	)
 
-	registry.MustRegister(requestDurations)
+	jobCounter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "batchjob_count",
+		Help: "A counter of batch job runs, success and failed",
+	},
+		[]string{"status"},
+	)
+
+	registry.MustRegister(requestDurations, jobCounter)
 
 	listenAddr := flag.String("web.listen-addr", ":8080", "The address to listen on for web requests.")
 	flag.Parse()
 
-	go periodicBackgroundTask()
+	go periodicBackgroundTask(jobCounter)
 
-	api := &demoAPI{requestDurations: requestDurations, registry: registry}
+	api := &demoAPI{requestDurations: requestDurations, registry: registry, jobCounter: jobCounter}
 	api.register(http.DefaultServeMux)
 
 	log.Fatal(http.ListenAndServe(*listenAddr, nil))
