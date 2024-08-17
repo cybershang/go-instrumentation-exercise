@@ -2,37 +2,46 @@ package main
 
 import (
 	"flag"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"log"
 	"math/rand"
 	"net/http"
 	"time"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type demoAPI struct{}
+type demoAPI struct{
+	registry *prometheus.Registry
+	requestDurations *prometheus.SummaryVec
+}
 
 func (a demoAPI) register(mux *http.ServeMux) {
+	// HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 	mux.HandleFunc("/api/foo", a.foo)
 	mux.HandleFunc("/api/bar", a.bar)
+	// Handle(pattern string, handler http.Handler)
+	mux.Handle("/metrics", promhttp.HandlerFor(a.registry, promhttp.HandlerOpts{}))
 }
 
 func (a demoAPI) foo(w http.ResponseWriter, r *http.Request) {
+	timer := prometheus.NewTimer(a.requestDurations.WithLabelValues("/foo"))
 	log.Println("Handling foo...")
 
 	// Simulate a random duration that the "foo" operation needs to be completed.
 	time.Sleep(25*time.Millisecond + time.Duration(rand.Float64()*150)*time.Millisecond)
 
 	w.Write([]byte("Handled foo"))
+	timer.ObserveDuration()
 }
 
 func (a demoAPI) bar(w http.ResponseWriter, r *http.Request) {
+	timer := prometheus.NewTimer(a.requestDurations.WithLabelValues("/bar"))
 	log.Println("Handling bar...")
 	// Simulate a random duration that the "bar" operation needs to be completed.
 	time.Sleep(50*time.Millisecond + time.Duration(rand.Float64()*200)*time.Millisecond)
 
 	w.Write([]byte("Handled bar"))
+	timer.ObserveDuration()
 }
 
 func periodicBackgroundTask() {
@@ -56,14 +65,27 @@ func periodicBackgroundTask() {
 
 func main() {
 	registry := prometheus.NewRegistry()
+
+	requestDurations := prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Name: "http_request_duration_seconds",
+		Help: "A summary of the HTTP request duration in seconds.",
+		Objectives: map[float64]float64{
+			0.5:  0.05,
+			0.9:  0.01,
+			0.99: 0.001},
+	},
+		[]string{"path"},
+	)
+
+	registry.MustRegister(requestDurations)
+
 	listenAddr := flag.String("web.listen-addr", ":8080", "The address to listen on for web requests.")
 	flag.Parse()
 
 	go periodicBackgroundTask()
 
-	api := &demoAPI{}
+	api := &demoAPI{requestDurations: requestDurations, registry: registry}
 	api.register(http.DefaultServeMux)
-	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 
 	log.Fatal(http.ListenAndServe(*listenAddr, nil))
 }
